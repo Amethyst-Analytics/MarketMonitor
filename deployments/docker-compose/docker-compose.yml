@@ -1,0 +1,45 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.14.2-pg15
+    container_name: timescaledb
+    restart: unless-stopped
+
+    ports:
+      - "5432:5432"
+
+    environment:
+      POSTGRES_DB: market_data
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin123
+      TZ: Asia/Kolkata
+
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=timescaledb
+      - -c
+      - max_connections=100
+      - -c
+      - work_mem=64MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - wal_compression=on
+      - -c
+      - synchronous_commit=off
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  timescale_data:
+  redis_data:

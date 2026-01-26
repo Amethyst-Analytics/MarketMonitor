@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: upstox-catalog-sync
+  namespace: marketmonitor
+spec:
+  schedule: "0 7 * * 1-5" # Weekdays at 07:00 (pre-market)
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: catalog-sync
+              image: marketmonitor/catalog-service:latest
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - secretRef:
+                    name: marketmonitor-secrets
+              command: ["python", "-m", "catalog_service"]
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "250m"
+          restartPolicy: OnFailure
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mtf-sync
+  namespace: marketmonitor
+spec:
+  schedule: "0 8 * * 1-5" # Weekdays at 08:00
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: mtf-sync
+              image: marketmonitor/catalog-service:latest
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - secretRef:
+                    name: marketmonitor-secrets
+              command: ["python", "-m", "catalog_service.mtf_loader"]
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "250m"
+          restartPolicy: OnFailure

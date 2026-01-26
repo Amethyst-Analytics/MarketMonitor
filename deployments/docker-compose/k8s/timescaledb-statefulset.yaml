@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: timescaledb
+  namespace: marketmonitor
+spec:
+  serviceName: timescaledb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: timescaledb
+  template:
+    metadata:
+      labels:
+        app: timescaledb
+    spec:
+      containers:
+        - name: timescaledb
+          image: timescale/timescaledb:2.14.2-pg15
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: market_data
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: admin123
+            - name: TZ
+              value: Asia/Kolkata
+          volumeMounts:
+            - name: timescale-data
+              mountPath: /var/lib/postgresql/data
+          command:
+            - postgres
+            - -c
+            - shared_preload_libraries=timescaledb
+            - -c
+            - max_connections=100
+            - -c
+            - work_mem=64MB
+            - -c
+            - maintenance_work_mem=512MB
+            - -c
+            - wal_compression=on
+            - -c
+            - synchronous_commit=off
+  volumeClaimTemplates:
+    - metadata:
+        name: timescale-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: timescaledb
+  namespace: marketmonitor
+spec:
+  selector:
+    app: timescaledb
+  ports:
+    - port: 5432
+      targetPort: 5432
+  clusterIP: None
