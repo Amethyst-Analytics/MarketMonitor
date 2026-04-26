@@ -1,0 +1,247 @@
+name: PR Quality Gates
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Style
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lint tools
+        run: pip install ruff black isort
+
+      - name: ruff
+        id: ruff
+        run: ruff check --output-format=github .
+        continue-on-error: true
+
+      - name: black
+        id: black
+        run: black --check .
+        continue-on-error: true
+
+      - name: isort
+        id: isort
+        run: isort --check-only --profile black .
+        continue-on-error: true
+
+      - name: Post failure comment
+        if: steps.ruff.outcome == 'failure' || steps.black.outcome == 'failure' || steps.isort.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const failures = [];
+            if ('${{ steps.ruff.outcome }}' === 'failure') failures.push('**ruff**: fix with `ruff check --fix .`');
+            if ('${{ steps.black.outcome }}' === 'failure') failures.push('**black**: fix with `black .`');
+            if ('${{ steps.isort.outcome }}' === 'failure') failures.push('**isort**: fix with `isort --profile black .`');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## \u274c Lint & Style Failed\n\n${failures.join('\n')}\n\nRun these commands locally to fix before pushing.`
+            });
+
+      - name: Fail if any lint check failed
+        if: steps.ruff.outcome == 'failure' || steps.black.outcome == 'failure' || steps.isort.outcome == 'failure'
+        run: exit 1
+
+  test-coverage:
+    name: Tests & Coverage
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: amethyst_app
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: amethyst_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U amethyst_app -d amethyst_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install pytest pytest-cov coverage
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run tests with coverage
+        id: pytest
+        run: pytest --cov=. --cov-report=xml --cov-report=term-missing --cov-fail-under=80
+        continue-on-error: true
+
+      - name: Post coverage comment
+        uses: MishaKav/pytest-coverage-comment@main
+        with:
+          pytest-xml-coverage-path: ./coverage.xml
+          title: Test Coverage Report
+          badge-title: Coverage
+          hide-badge: false
+          hide-report: false
+          create-new-comment: false
+          hide-comment: false
+          report-only-changed-files: false
+          remove-link-from-badge: false
+        continue-on-error: true
+
+      - name: Post failure comment
+        if: steps.pytest.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## \u274c Tests & Coverage Failed\n\nTests failed or coverage dropped below 80%.\n\nRun locally: \`pytest --cov=. --cov-report=term-missing --cov-fail-under=80\``
+            });
+
+      - name: Fail if tests failed
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install security tools
+        run: pip install bandit safety
+
+      - name: bandit
+        id: bandit
+        run: bandit -r . -ll -x ./tests
+        continue-on-error: true
+
+      - name: safety
+        id: safety
+        run: safety check --full-report
+        continue-on-error: true
+
+      - name: Post failure comment
+        if: steps.bandit.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## \u274c Security Scan Found Issues\n\nbandit detected security issues.\n\nRun locally: \`bandit -r . -ll -x ./tests\`\n\nReview findings before proceeding.`
+            });
+
+      - name: Fail if bandit failed
+        if: steps.bandit.outcome == 'failure'
+        run: exit 1
+
+  boundary-check:
+    name: Service Boundary Check
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run boundary check
+        id: boundary
+        run: python scripts/check_boundaries.py
+        continue-on-error: true
+
+      - name: Post failure comment
+        if: steps.boundary.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## \u274c Service Boundary Violation\n\nA cross-service import was detected. Services must only communicate via REST or Redis Pub/Sub.\n\nRun locally: \`python scripts/check_boundaries.py\``
+            });
+
+      - name: Fail if boundary violated
+        if: steps.boundary.outcome == 'failure'
+        run: exit 1
+
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [lint, test-coverage, security, boundary-check]
+    if: always() && github.event.pull_request.draft == false
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const results = {
+              'Lint & Style':     '${{ needs.lint.result }}',
+              'Tests & Coverage': '${{ needs.test-coverage.result }}',
+              'Security Scan':    '${{ needs.security.result }}',
+              'Boundary Check':   '${{ needs.boundary-check.result }}',
+            };
+            const icon = (r) => r === 'success' ? '\u2705' : r === 'failure' ? '\u274c' : '\u23ed\ufe0f';
+            const rows = Object.entries(results)
+              .map(([name, result]) => `| ${name} | ${icon(result)} ${result} |`)
+              .join('\n');
+            const allPassed = Object.values(results).every(r => r === 'success');
+            const footer = allPassed
+              ? '\u2705 All gates passed. PR is ready for review.'
+              : '\u274c One or more gates failed.';
+            const body = `## CI Quality Gate Summary\n\n| Gate | Result |\n|---|---|\n${rows}\n\n${footer}`;
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.data.find(c => c.body.includes('CI Quality Gate Summary'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+            }

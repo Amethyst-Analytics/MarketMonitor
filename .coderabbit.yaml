@@ -1,0 +1,44 @@
+language: en
+
+reviews:
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+chat:
+  auto_reply: true
+
+path_instructions:
+  - path: "src/**/*.py"
+    instructions: |
+      Review for:
+      - async/await correctness - all DB and HTTP calls must be async
+      - UTC-only timestamps - no local timezone conversions, use TIMESTAMPTZ in SQL
+      - Repository pattern compliance - no raw ORM queries outside repository classes
+      - Pydantic validation at all system boundaries
+      - reStructuredText (reST) docstrings on every public class and method
+      - No hardcoded credentials, secrets, or connection strings
+      - No cross-service imports (services communicate via REST or Redis Pub/Sub only)
+      - BaseService graceful shutdown - services must handle SIGTERM/SIGINT
+
+  - path: "tests/**/*.py"
+    instructions: |
+      Review for:
+      - testcontainers usage for real DB/Redis dependencies (no mocks for infra)
+      - Happy path and all documented error cases covered
+      - No external service dependencies that are not containerised
+      - Test naming: test_<function>_<scenario>_<expected_outcome>
+
+  - path: "migrations/**"
+    instructions: |
+      Review for:
+      - Reversible migrations (down migrations defined)
+      - No data loss in up migrations
+      - Correct TimescaleDB hypertable creation (create_hypertable called after CREATE TABLE)
+      - Compression and retention policies applied after hypertable creation
