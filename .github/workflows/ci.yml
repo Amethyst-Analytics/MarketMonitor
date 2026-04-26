@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  POETRY_VERSION: "1.7.1"
+
+jobs:
+  lint:
+    name: Lint & Style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pipx install poetry==${{ env.POETRY_VERSION }}
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: black
+        run: poetry run black --check src/ tests/
+
+      - name: isort
+        run: poetry run isort --check-only --profile black src/ tests/
+
+      - name: ruff
+        run: poetry run ruff check src/ tests/
+
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pipx install poetry==${{ env.POETRY_VERSION }}
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: mypy
+        run: poetry run mypy --strict src/
+
+  test:
+    name: Tests & Coverage
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:2.13.1-pg16
+        env:
+          POSTGRES_USER: amethyst_app
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: amethyst_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U amethyst_app -d amethyst_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pipx install poetry==${{ env.POETRY_VERSION }}
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run tests with coverage
+        env:
+          DATABASE_URL: postgresql://amethyst_app:test_password@localhost:5432/amethyst_test
+          REDIS_URL: redis://localhost:6379
+        run: |
+          poetry run pytest \
+            --cov=src/market_monitor \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=80 \
+            -v tests/
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pipx install poetry==${{ env.POETRY_VERSION }}
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: bandit
+        run: poetry run bandit -r src/ -c pyproject.toml
+
+      - name: safety
+        run: poetry run safety check --full-report
+        continue-on-error: false
+
+  boundary-check:
+    name: Service Boundary Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for cross-service imports
+        run: |
+          echo "Checking for forbidden cross-service imports in MarketMonitor..."
+          FORBIDDEN=("amethyst_server" "amethyst_analytics")
+          FOUND=0
+          for pkg in "${FORBIDDEN[@]}"; do
+            if grep -r "from ${pkg}" src/ --include="*.py" -l 2>/dev/null; then
+              echo "ERROR: Import of '${pkg}' found in MarketMonitor source — cross-service imports are forbidden."
+              FOUND=1
+            fi
+            if grep -r "import ${pkg}" src/ --include="*.py" -l 2>/dev/null; then
+              echo "ERROR: Import of '${pkg}' found in MarketMonitor source — cross-service imports are forbidden."
+              FOUND=1
+            fi
+          done
+          if [ $FOUND -ne 0 ]; then exit 1; fi
+          echo "Boundary check passed."
