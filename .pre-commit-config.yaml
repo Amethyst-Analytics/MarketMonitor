@@ -15,7 +15,6 @@ repos:
     rev: 24.4.2
     hooks:
       - id: black
-        language_version: python3.11
 
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
@@ -33,7 +32,7 @@ repos:
     rev: v1.10.0
     hooks:
       - id: mypy
-        args: ["--strict", "--ignore-missing-imports"]
+        args: ["--strict", "--ignore-missing-imports", "--python-version", "3.11"]
         additional_dependencies:
           - pydantic>=2.0
           - types-redis
